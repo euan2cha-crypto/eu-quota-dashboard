@@ -1,1 +1,89 @@
+import json
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
 
+QUOTAS = {
+    "South Korea": "099854",
+    "Indonesia": "099855",
+    "India": "099856",
+    "Japan": "099857",
+    "North Macedonia": "099858",
+    "United Kingdom": "099859",
+    "FTA-CSQ": "099509",
+    "Other Countries": "099609",
+    "FTA-Other": "099727",
+    "Turkiye": "099728",
+}
+
+def quarter_start():
+    now = datetime.utcnow()
+    q_month = ((now.month - 1) // 3) * 3 + 1
+    return f"{now.year}-{q_month:02d}-01"
+
+def extract_value(rows, label):
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < 2:
+            continue
+
+        key = tds[0].get_text(" ", strip=True)
+
+        if label.lower() in key.lower():
+            return tds[1].get_text(" ", strip=True)
+
+    return None
+
+results = {}
+
+for country, code in QUOTAS.items():
+
+    url = (
+        "https://ec.europa.eu/taxation_customs/dds2/taric/"
+        f"quota_tariff_details.jsp?Lang=en"
+        f"&StartDate={quarter_start()}"
+        f"&Code={code}"
+    )
+
+    html = requests.get(
+        url,
+        headers={
+            "User-Agent":"Mozilla/5.0"
+        },
+        timeout=30
+    ).text
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    rows = soup.select("tr")
+
+    initial = extract_value(rows, "Initial amount")
+    balance = extract_value(rows, "Balance")
+    awaiting = extract_value(rows, "Total awaiting allocation")
+
+    def clean(v):
+        if v is None:
+            return None
+
+        v = (
+            v.replace("Kilogram", "")
+             .replace(",", "")
+             .strip()
+        )
+
+        digits = "".join(c for c in v if c.isdigit())
+
+        return int(digits) if digits else None
+
+    results[code] = {
+        "country": country,
+        "initial_amount": clean(initial),
+        "balance": clean(balance),
+        "awaiting": clean(awaiting),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+
+with open("data/quota.json","w") as f:
+    json.dump(results, f, indent=2)
+
+print("quota.json updated")
